@@ -1,0 +1,62 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "replayagent"
+version = "0.1.0"
+description = "Record, replay, and regression-test AI agent trajectories — pytest for AI agents."
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.10"
+authors = [{ name = "Ruthvik Bathala" }]
+keywords = ["agents", "llm", "eval", "testing", "regression", "trajectory"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Software Development :: Testing",
+]
+dependencies = [
+    "pydantic>=2.0",
+    "typer>=0.9",
+    "rich>=13.0",
+    "pyyaml>=6.0",
+]
+
+[project.optional-dependencies]
+langgraph = ["langgraph>=0.2"]
+openai = ["openai>=1.0"]
+llm = ["openai>=1.0", "anthropic>=0.30"]
+dev = ["pytest>=7.0", "ruff>=0.1"]
+
+[project.scripts]
+replayagent = "replayagent.cli:app"
+
+[project.urls]
+Homepage = "https://github.com/RuthvikBathala/replayagent"
+Repository = "https://github.com/RuthvikBathala/replayagent"
+Issues = "https://github.com/RuthvikBathala/replayagent/issues"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/replayagent"]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP"]
+ignore = ["B008"]  # typer.Option() in defaults is the documented typer pattern
+
+[tool.ruff.lint.per-file-ignores]
+"src/replayagent/adapters/openai.py" = ["BLE001", "S110"]  # recording must never break the wrapped call
+"tests/*" = ["S101"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

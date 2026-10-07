@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+.venv/
+.venv*/
+
+# Test / coverage
+.pytest_cache/
+.coverage
+htmlcov/
+
+# replayagent run store (local, per-project)
+.replayagent/
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Env
+.env
