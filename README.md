@@ -83,12 +83,15 @@ changed — wire it into CI:
 | `exact` | Final answers are exactly equal |
 | `contains` | Final answer contains a string or regex |
 | `similarity` | Offline token-overlap similarity ≥ threshold (no API needed) |
-| `tools` | Same tool calls, in order (or unordered) |
+| `tools` | Tool calls match in `strict` (default, in order), `unordered`, `subset` (no extras), or `superset` (at least the baseline) mode; optionally checks call arguments too |
 | `llm` | LLM-as-judge via OpenAI/Anthropic (only runs with API keys set) |
 
 ```python
 from replayagent.judges import get_judge
 judge = get_judge("similarity", threshold=0.8)
+# Trajectory-match modes follow LangChain agentevals; check_arguments
+# catches the right tool called with the wrong arguments:
+judge = get_judge("tools", mode="superset", check_arguments=True)
 ```
 
 ## Architecture

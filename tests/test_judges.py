@@ -73,6 +73,86 @@ def test_tool_call_judge_strict():
     assert ToolCallJudge(strict_order=False).evaluate(base, diff).passed
 
 
+def _traj_with_calls(run_id: str, calls: list[tuple[str, dict]]):
+    from replayagent import Recorder
+
+    rec = Recorder("demo-agent", model="gpt-4o", input={}, run_id=run_id, autosave=False)
+    for name, args in calls:
+        rec.tool_call(name=name, arguments=args)
+    rec.final_answer("done")
+    return rec.trajectory
+
+
+def test_tool_call_judge_subset_mode():
+    base = make_trajectory(tools=("a", "b"))
+    fewer = make_trajectory(run_id="b", tools=("a",))
+    extra = make_trajectory(run_id="c", tools=("a", "b", "c"))
+    judge = ToolCallJudge(mode="subset")
+    # No extras beyond the baseline is a pass, even if a call is missing.
+    assert judge.evaluate(base, fewer).passed
+    assert judge.evaluate(base, base).passed
+    # An extra tool the baseline never called is a failure.
+    assert not judge.evaluate(base, extra).passed
+    assert judge.evaluate(base, fewer).details["mode"] == "subset"
+
+
+def test_tool_call_judge_superset_mode():
+    base = make_trajectory(tools=("a", "b"))
+    extra = make_trajectory(run_id="b", tools=("a", "b", "c"))
+    fewer = make_trajectory(run_id="c", tools=("a",))
+    judge = ToolCallJudge(mode="superset")
+    # At least the baseline tools is a pass, extras allowed.
+    assert judge.evaluate(base, extra).passed
+    assert judge.evaluate(base, base).passed
+    # A missing required tool is a failure.
+    assert not judge.evaluate(base, fewer).passed
+
+
+def test_tool_call_judge_subset_superset_respect_multiplicities():
+    # Duplicate calls count: calling "a" twice is not a subset of calling it once.
+    base = _traj_with_calls("base", [("a", {})])
+    twice = _traj_with_calls("cand", [("a", {}), ("a", {})])
+    assert not ToolCallJudge(mode="subset").evaluate(base, twice).passed
+    assert ToolCallJudge(mode="superset").evaluate(base, twice).passed
+
+
+def test_tool_call_judge_invalid_mode():
+    with pytest.raises(ValueError):
+        ToolCallJudge(mode="fuzzy")
+
+
+def test_tool_call_judge_check_arguments():
+    base = _traj_with_calls("base", [("reset_password", {"user": "amy"})])
+    same_args = _traj_with_calls("b", [("reset_password", {"user": "amy"})])
+    wrong_args = _traj_with_calls("c", [("reset_password", {"user": "bob"})])
+    # Names-only (default, backwards compatible): wrong arguments still pass.
+    assert ToolCallJudge().evaluate(base, wrong_args).passed
+    # With argument checking: same name + wrong arguments fails.
+    judge = ToolCallJudge(check_arguments=True)
+    assert judge.evaluate(base, same_args).passed
+    assert not judge.evaluate(base, wrong_args).passed
+
+
+def test_tool_call_judge_check_arguments_unordered_and_superset():
+    base = _traj_with_calls("base", [("a", {"x": 1}), ("b", {"y": 2})])
+    reordered = _traj_with_calls("b", [("b", {"y": 2}), ("a", {"x": 1})])
+    reordered_wrong = _traj_with_calls("c", [("b", {"y": 99}), ("a", {"x": 1})])
+    unordered = ToolCallJudge(mode="unordered", check_arguments=True)
+    assert unordered.evaluate(base, reordered).passed
+    assert not unordered.evaluate(base, reordered_wrong).passed
+    superset = ToolCallJudge(mode="superset", check_arguments=True)
+    extra = _traj_with_calls("d", [("a", {"x": 1}), ("b", {"y": 2}), ("c", {})])
+    assert superset.evaluate(base, extra).passed
+    assert not superset.evaluate(base, reordered_wrong).passed
+
+
+def test_tool_call_judge_via_registry():
+    assert isinstance(get_judge("tools", mode="superset"), ToolCallJudge)
+    assert get_judge("tools", mode="superset").mode == "superset"
+    assert get_judge("tools").mode == "strict"
+    assert get_judge("tools", strict_order=False).mode == "unordered"
+
+
 def test_get_judge_registry():
     assert isinstance(get_judge("exact"), ExactMatchJudge)
     assert isinstance(get_judge("similarity", threshold=0.5), SemanticSimilarityJudge)

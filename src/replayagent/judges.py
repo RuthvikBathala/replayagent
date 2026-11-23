@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import json
 import os
 import re
 from abc import ABC, abstractmethod
+from collections import Counter
 from typing import Any
 
 from pydantic import BaseModel, Field
@@ -113,26 +115,94 @@ class SemanticSimilarityJudge(Judge):
 
 
 class ToolCallJudge(Judge):
-    """Passes when the candidate makes the same tool calls (by name, in order)."""
+    """Passes when the candidate's tool calls match the baseline's.
+
+    Modes follow the trajectory-match modes standardised by LangChain's
+    ``agentevals`` package (strict / unordered / subset / superset):
+
+    - ``strict`` (default): same calls, in the same order.
+    - ``unordered``: same calls, in any order.
+    - ``subset``: candidate calls only tools from the baseline (no extras);
+      missing baseline calls are allowed.
+    - ``superset``: candidate calls at least the baseline tools; extra
+      calls are allowed.
+
+    The legacy ``strict_order`` flag is kept for backwards compatibility:
+    ``strict_order=True`` maps to ``strict`` and ``False`` to ``unordered``
+    when ``mode`` is not given.
+
+    By default only tool *names* are compared, as before. With
+    ``check_arguments=True`` the arguments of each call are compared too,
+    so a call to the right tool with the wrong arguments fails — the
+    argument-correctness check used by DeepEval / Pydantic Evals.
+    """
 
     name = "tool_calls"
 
-    def __init__(self, strict_order: bool = True) -> None:
-        self.strict_order = strict_order
+    _MODES = ("strict", "unordered", "subset", "superset")
+
+    def __init__(
+        self,
+        strict_order: bool = True,
+        *,
+        mode: str | None = None,
+        check_arguments: bool = False,
+    ) -> None:
+        if mode is not None:
+            if mode not in self._MODES:
+                raise ValueError(f"mode must be one of {self._MODES}, got {mode!r}")
+            self.mode = mode
+        else:
+            self.mode = "strict" if strict_order else "unordered"
+        # Kept for backwards compatibility with code reading .strict_order.
+        self.strict_order = self.mode == "strict"
+        self.check_arguments = check_arguments
+
+    def _call_keys(self, traj: Trajectory) -> list[tuple[str, str]]:
+        """Return one hashable key per tool call: (name, canonical arguments)."""
+        keys: list[tuple[str, str]] = []
+        for step in traj.tool_calls():
+            name = str(step.payload.get("name", ""))
+            if self.check_arguments:
+                args = step.payload.get("arguments") or {}
+                canonical = json.dumps(args, sort_keys=True, default=str)
+            else:
+                canonical = ""
+            keys.append((name, canonical))
+        return keys
 
     def evaluate(self, baseline: Trajectory, candidate: Trajectory) -> JudgeResult:
         expected = baseline.tool_call_names()
         actual = candidate.tool_call_names()
-        if self.strict_order:
-            passed = expected == actual
+        expected_keys = self._call_keys(baseline)
+        actual_keys = self._call_keys(candidate)
+
+        if self.mode == "strict":
+            passed = expected_keys == actual_keys
+        elif self.mode == "unordered":
+            passed = Counter(expected_keys) == Counter(actual_keys)
+        elif self.mode == "subset":
+            passed = not (Counter(actual_keys) - Counter(expected_keys))
+        else:  # superset
+            passed = not (Counter(expected_keys) - Counter(actual_keys))
+
+        if passed:
+            reason = f"tool calls match ({self.mode})"
+        elif self.check_arguments:
+            reason = (
+                f"tool calls (with arguments) differ ({self.mode}): "
+                f"{expected_keys} vs {actual_keys}"
+            )
         else:
-            passed = sorted(expected) == sorted(actual)
+            reason = f"tool calls differ ({self.mode}): {expected} vs {actual}"
         return self._result(
             passed,
             1.0 if passed else 0.0,
-            "tool call sequences match" if passed else f"tool calls differ: {expected} vs {actual}",
+            reason,
             expected=expected,
             actual=actual,
+            mode=self.mode,
+            check_arguments=self.check_arguments,
         )
 
 
