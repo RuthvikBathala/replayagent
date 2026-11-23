@@ -68,6 +68,11 @@ replayagent report <run-id> --candidate <new-id> --format html -o report.html
 replayagent promote <run-id> --reason "broke in prod"  # save a run as a regression case
 replayagent cases                                   # list regression cases
 replayagent eval-case <case-id> --candidate <new-id>   # check a run against a case
+replayagent ingest traces.json                      # ingest production traces into the run store
+replayagent clusters traces.json                    # cluster the failures in an upload
+replayagent draft-cases traces.json                 # auto-draft a case per failure cluster
+replayagent drafts                                  # list drafts awaiting review
+replayagent promote-draft <draft-id>                # promote a reviewed draft into a case
 ```
 
 ### Regression cases: turn production failures into tests
@@ -97,6 +102,30 @@ Cases are plain JSON under `.replayagent/cases/`. Expectations default to the
 run itself; `--expected-answer` / `expected_tool_calls` override them when a
 reviewer knows the right behaviour. The original run is kept untouched inside
 the case for provenance.
+
+### From production traces to cases (ingest → cluster → draft → promote)
+
+You don't have to record failures locally — upload the traces you already
+have. `replayagent ingest` accepts a JSON file (a list, or `{"traces": [...]}`)
+of Langfuse/OTel-shaped traces: each trace has an `id`, optional
+`name`/`model`, an `input`, ordered `steps` (`llm_call` / `tool_call` /
+`tool_result` / `final_answer`), a final `status` or `error`, and an optional
+`expected` behaviour. See `examples/production_traces.json` for a sample and
+the `replayagent.ingest` module docstring for the full accepted schema.
+
+Failures are detected deterministically (explicit error status, a step error,
+or a final answer that doesn't match the recorded `expected` behaviour) and
+clustered by failing tool + normalised error signature, so one root cause
+appears once with a count (`replayagent clusters`). `replayagent draft-cases`
+then writes one **draft** case per cluster under `.replayagent/drafts/`,
+pre-filled from a representative failed trace and marked `draft: true` in its
+metadata. Drafts are *not* cases yet: a human reviews one — above all the
+expected answer, since a failed run's own answer is usually wrong — and
+`replayagent promote-draft <draft-id> [--expected-answer "..."]` sends it
+through the normal promote flow into `.replayagent/cases/`, where `eval-case`
+checks future runs against it like any other case. No LLM calls are made;
+the judging seam (`FailureJudge`) defaults to a deterministic exact-match
+check against the recorded expectation.
 
 `replayagent eval` exits non-zero when any judge fails or the tool-call sequence
 changed — wire it into CI:
@@ -134,6 +163,7 @@ src/replayagent/
 ├── replay.py       # Re-execute an agent fn against recorded inputs
 ├── judges.py       # Pluggable judges: exact, contains, similarity, tools, llm
 ├── cases.py        # Regression cases: promote a run into a reusable test case
+├── ingest.py       # Production traces: ingest -> cluster failures -> draft cases
 ├── diff.py         # Step-by-step diff + regression verdict
 ├── reporters.py    # terminal (rich) | JSON | JUnit XML | static HTML
 ├── cli.py          # typer CLI

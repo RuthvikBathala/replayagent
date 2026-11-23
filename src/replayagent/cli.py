@@ -11,6 +11,15 @@ from rich.console import Console
 
 from replayagent.cases import check_case, list_cases, load_case, promote_run
 from replayagent.diff import diff_trajectories
+from replayagent.ingest import (
+    IngestError,
+    cluster_traces,
+    draft_cases,
+    list_drafts,
+    load_traces,
+    promote_draft,
+    save_ingested,
+)
 from replayagent.judges import Judge, get_judge
 from replayagent.recorder import DEFAULT_STORE_DIR, Recorder, list_runs, load_run
 from replayagent.recorder import record as new_recording
@@ -231,6 +240,108 @@ def eval_case(
     diff = check_case(case, cand, judges=_build_judges(judge))
     terminal_report(diff, console)
     raise typer.Exit(code=1 if diff.is_regression else 0)
+
+
+@app.command()
+def ingest(
+    file: Path = typer.Argument(..., help="JSON file of production traces (see ingest schema)."),
+    store_dir: Path | None = typer.Option(None, "--store-dir", help="Run store directory."),
+) -> None:
+    """Ingest production traces into the run store; report failures found."""
+    try:
+        traces = load_traces(file)
+    except (FileNotFoundError, IngestError) as exc:
+        raise typer.BadParameter(str(exc))
+    save_ingested(traces, store_dir=store_dir)
+    clusters = cluster_traces(traces)
+    failed = sum(c.count for c in clusters)
+    console.print(
+        f"[green]Ingested[/green] [bold]{len(traces)}[/bold] trace(s) into the run store; "
+        f"{failed} failure(s) in {len(clusters)} cluster(s)."
+    )
+
+
+@app.command()
+def clusters(
+    file: Path = typer.Argument(..., help="JSON file of production traces."),
+) -> None:
+    """List failure clusters detected in a production-trace upload."""
+    try:
+        traces = load_traces(file)
+    except (FileNotFoundError, IngestError) as exc:
+        raise typer.BadParameter(str(exc))
+    found = cluster_traces(traces)
+    if not found:
+        console.print("[dim]No failures detected in this upload.[/dim]")
+        return
+    for c in found:
+        console.print(
+            f"[bold]{c.cluster_id}[/bold]  count={c.count}  tool={c.failing_tool or '-'}  "
+            f"[dim]{c.error_signature}[/dim]  runs: {', '.join(c.run_ids)}"
+        )
+
+
+@app.command(name="draft-cases")
+def draft_cases_cmd(
+    file: Path = typer.Argument(..., help="JSON file of production traces."),
+    drafts_dir: Path | None = typer.Option(None, "--drafts-dir", help="Draft cases directory."),
+    store_dir: Path | None = typer.Option(None, "--store-dir", help="Run store directory."),
+) -> None:
+    """Draft a regression case per failure cluster (drafts need human review)."""
+    try:
+        traces = load_traces(file)
+    except (FileNotFoundError, IngestError) as exc:
+        raise typer.BadParameter(str(exc))
+    save_ingested(traces, store_dir=store_dir)
+    drafts = draft_cases(cluster_traces(traces), traces, drafts_dir=drafts_dir)
+    if not drafts:
+        console.print("[dim]No failures detected — no drafts generated.[/dim]")
+        return
+    for d in drafts:
+        console.print(
+            f"[yellow]DRAFT[/yellow] [bold]{d.case_id}[/bold]  {d.name}  "
+            f"[dim]from run {d.source_run_id} — review before promoting[/dim]"
+        )
+
+
+@app.command(name="drafts")
+def drafts_cmd(
+    drafts_dir: Path | None = typer.Option(None, "--drafts-dir", help="Draft cases directory."),
+) -> None:
+    """List auto-drafted regression cases awaiting review."""
+    drafts = list_drafts(drafts_dir)
+    if not drafts:
+        console.print("[dim]No draft cases yet. Try `replayagent draft-cases <traces.json>`.[/dim]")
+        return
+    for d in drafts:
+        console.print(
+            f"[bold]{d.case_id}[/bold]  {d.name}  [dim]from run {d.source_run_id}[/dim]"
+        )
+
+
+@app.command(name="promote-draft")
+def promote_draft_cmd(
+    draft_id: str = typer.Argument(..., help="Draft case id to promote after review."),
+    expected_answer: str | None = typer.Option(
+        None, "--expected-answer", help="Correct final answer, if the draft's is wrong."
+    ),
+    drafts_dir: Path | None = typer.Option(None, "--drafts-dir", help="Draft cases directory."),
+    cases_dir: Path | None = typer.Option(None, "--cases-dir", help="Regression cases directory."),
+) -> None:
+    """Promote a reviewed draft into a real regression case (existing promote flow)."""
+    try:
+        case = promote_draft(
+            draft_id,
+            drafts_dir=drafts_dir,
+            cases_dir=cases_dir,
+            expected_final_answer=expected_answer,
+        )
+    except FileNotFoundError as exc:
+        raise typer.BadParameter(str(exc))
+    console.print(
+        f"[green]Promoted draft[/green] [bold]{draft_id}[/bold] to regression case "
+        f"[bold]{case.case_id}[/bold] ({case.name})"
+    )
 
 
 @app.command()
