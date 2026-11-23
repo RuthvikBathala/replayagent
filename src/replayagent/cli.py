@@ -9,6 +9,7 @@ import typer
 import yaml
 from rich.console import Console
 
+from replayagent.cases import check_case, list_cases, load_case, promote_run
 from replayagent.diff import diff_trajectories
 from replayagent.judges import Judge, get_judge
 from replayagent.recorder import DEFAULT_STORE_DIR, Recorder, list_runs, load_run
@@ -82,6 +83,7 @@ def init(
     """Initialize replayagent in a project (creates .replayagent/ + config)."""
     store = path / DEFAULT_STORE_DIR
     store.mkdir(parents=True, exist_ok=True)
+    (path / ".replayagent" / "cases").mkdir(parents=True, exist_ok=True)
     config = path / ".replayagent" / "config.yaml"
     if not config.exists():
         config.write_text(
@@ -165,6 +167,70 @@ def eval(
     """Evaluate a replayed run against its baseline. Exits 1 on regression (CI-friendly)."""
     code = _run_eval(run_id, candidate, judge, store_dir)
     raise typer.Exit(code=code)
+
+
+@app.command()
+def promote(
+    run_id: str = typer.Argument(..., help="Recorded run id to promote."),
+    name: str | None = typer.Option(None, "--name", help="Case name (defaults to agent + run)."),
+    reason: str = typer.Option("", "--reason", help="Why this run matters (e.g. the failure)."),
+    expected_answer: str | None = typer.Option(
+        None, "--expected-answer", help="Correct final answer, if the run's own was wrong."
+    ),
+    store_dir: Path | None = typer.Option(None, "--store-dir", help="Run store directory."),
+    cases_dir: Path | None = typer.Option(None, "--cases-dir", help="Regression cases directory."),
+) -> None:
+    """Promote a recorded run into a reusable regression case."""
+    try:
+        case = promote_run(
+            run_id,
+            store_dir=store_dir,
+            name=name,
+            reason=reason,
+            expected_final_answer=expected_answer,
+            cases_dir=cases_dir,
+        )
+    except FileNotFoundError as exc:
+        raise typer.BadParameter(str(exc))
+    console.print(
+        f"[green]Promoted run[/green] [bold]{run_id}[/bold] to regression case "
+        f"[bold]{case.case_id}[/bold] ({case.name})"
+    )
+
+
+@app.command(name="cases")
+def cases_cmd(
+    cases_dir: Path | None = typer.Option(None, "--cases-dir", help="Regression cases directory."),
+) -> None:
+    """List regression cases."""
+    cases = list_cases(cases_dir)
+    if not cases:
+        console.print("[dim]No regression cases yet. Try `replayagent promote <run-id>`.[/dim]")
+        return
+    for c in cases:
+        console.print(
+            f"[bold]{c.case_id}[/bold]  {c.name}  [dim]from run {c.source_run_id}[/dim]  "
+            f"{c.created_at:%Y-%m-%d %H:%M}"
+        )
+
+
+@app.command(name="eval-case")
+def eval_case(
+    case_id: str = typer.Argument(..., help="Regression case id."),
+    candidate: str = typer.Option(..., "--candidate", help="Run id to check against the case."),
+    judge: list[str] = typer.Option(DEFAULT_JUDGES, "--judge", help="Judges to run."),
+    store_dir: Path | None = typer.Option(None, "--store-dir", help="Run store directory."),
+    cases_dir: Path | None = typer.Option(None, "--cases-dir", help="Regression cases directory."),
+) -> None:
+    """Evaluate a run against a regression case. Exits 1 on regression (CI-friendly)."""
+    try:
+        case = load_case(case_id, cases_dir)
+    except FileNotFoundError as exc:
+        raise typer.BadParameter(str(exc))
+    cand = load_run(candidate, store_dir)
+    diff = check_case(case, cand, judges=_build_judges(judge))
+    terminal_report(diff, console)
+    raise typer.Exit(code=1 if diff.is_regression else 0)
 
 
 @app.command()

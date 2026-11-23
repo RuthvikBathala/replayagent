@@ -65,7 +65,38 @@ replayagent list                                  # list recorded runs
 replayagent replay <run-id> --model gpt-4o-mini   # replay + diff + judge
 replayagent eval <run-id> --candidate <new-id>     # judge only; exits 1 on regression
 replayagent report <run-id> --candidate <new-id> --format html -o report.html
+replayagent promote <run-id> --reason "broke in prod"  # save a run as a regression case
+replayagent cases                                   # list regression cases
+replayagent eval-case <case-id> --candidate <new-id>   # check a run against a case
 ```
+
+### Regression cases: turn production failures into tests
+
+Agents pass their evals and still fail real users — and that failure is usually
+lost. A regression case preserves it: promote the failed run, correct what it
+*should* have done, and every future version is checked against it, so a fixed
+failure stays fixed.
+
+```bash
+# The run's own answer was wrong, so record the correct expectation:
+replayagent promote <run-id> --reason "told a customer the refund was approved" \
+    --expected-answer "Your refund is still pending."
+replayagent eval-case <case-id> --candidate <new-run-id>   # exits 1 until it's fixed
+```
+
+```python
+from replayagent import promote_run, check_case
+
+case = promote_run("abc123", reason="wrong tool in prod",
+                   expected_final_answer="Refund is still pending.",
+                   expected_tool_calls=["check_refund_status"])
+diff = check_case(case, candidate_trajectory)  # TrajectoryDiff, .is_regression
+```
+
+Cases are plain JSON under `.replayagent/cases/`. Expectations default to the
+run itself; `--expected-answer` / `expected_tool_calls` override them when a
+reviewer knows the right behaviour. The original run is kept untouched inside
+the case for provenance.
 
 `replayagent eval` exits non-zero when any judge fails or the tool-call sequence
 changed — wire it into CI:
@@ -102,6 +133,7 @@ src/replayagent/
 ├── recorder.py     # Recorder (context manager + decorator), JSONL store, load/list
 ├── replay.py       # Re-execute an agent fn against recorded inputs
 ├── judges.py       # Pluggable judges: exact, contains, similarity, tools, llm
+├── cases.py        # Regression cases: promote a run into a reusable test case
 ├── diff.py         # Step-by-step diff + regression verdict
 ├── reporters.py    # terminal (rich) | JSON | JUnit XML | static HTML
 ├── cli.py          # typer CLI
