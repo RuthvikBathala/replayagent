@@ -37,6 +37,7 @@ dev = ["pytest>=7.0", "ruff>=0.1"]
 
 [project.scripts]
 replayagent = "replayagent.cli:app"
+replayagent-hosted = "replayagent.hosted.app:main"
 
 [project.urls]
 Homepage = "https://github.com/RuthvikBathala/replayagent"

@@ -199,6 +199,16 @@ with record("my-agent", model="gpt-4o-mini") as rec:
     client.chat.completions.create(model="gpt-4o-mini", messages=[...])  # auto-logged
 ```
 
+## Hosted service (local MVP)
+
+A multi-tenant hosted version lives in `src/replayagent/hosted/`: an
+stdlib-only HTTP service where tenants submit trajectories with an API key,
+store them per tenant in SQLite, and fetch diff/regression reports computed
+by the core engine. Run it locally with
+`REPLAYAGENT_HOSTED_ADMIN_KEY=dev-admin python -m replayagent.hosted`.
+See [HOSTED_NOTES.md](HOSTED_NOTES.md) for the API, design, and what is
+still missing before a real launch. Not deployed anywhere.
+
 ## Roadmap
 
 - Pytest plugin (`@pytest.mark.agent_eval`) for trajectory assertions in test suites
